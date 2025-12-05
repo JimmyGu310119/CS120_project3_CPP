@@ -1,0 +1,26 @@
+# 忽略编译生成目录
+build/
+out/
+cmake-build-debug/
+
+# 忽略 VS Code 配置
+.vscode/
+
+# 忽略 Visual Studio 临时文件
+.vs/
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.lib
+*.suo
+*.user
+
+# 忽略系统文件
+.DS_Store
+Thumbs.db
+
+# [关键] 如果你的 JUCE 文件夹在 mine 里面，必须忽略它！
+# 因为 JUCE 库太大了（几百 MB），会导致上传失败。
+# 让你的室友自己去下载 JUCE 放在同级目录即可。
+JUCE/
