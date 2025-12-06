@@ -1,17 +1,22 @@
 #pragma once
 
+// [修正] 头文件包含顺序非常重要！
+// 1. 先定义 WIN32_LEAN_AND_MEAN 防止 windows.h 干扰
 #define WIN32_LEAN_AND_MEAN 
 
+// 2. 必须最先包含 winsock2.h
+#include <winsock2.h>
+#include <windows.h>
+
+// 3. 然后才是其他头文件
 #include "include/config.h"
 #include "include/reader.h"
 #include "include/writer.h"
 #include "include/utils.h"
 #include "include/ipv4_header.h"
 #include "include/icmp_header.h"
-// [新增] 引入 Tap.h
-#include "include/Tap.h"
+#include "include/Tap.h" // Tap.h 里也包含了 winsock2，但有 header guard 没事
 #include <JuceHeader.h>
-#include <winsock2.h> 
 #include <queue>
 #include <map>
 

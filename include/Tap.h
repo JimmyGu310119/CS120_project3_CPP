@@ -1,13 +1,16 @@
 #pragma once
 
+// [修正] 必须先包含 winsock2.h，再包含 windows.h 和 iphlpapi.h
+#include <winsock2.h>
 #include <windows.h>
-#include <winioctl.h>
 #include <iphlpapi.h>
+#include <winioctl.h>
 #include <vector>
 #include <string>
 #include <iostream>
 
 #pragma comment(lib, "IPHLPAPI.lib")
+#pragma comment(lib, "ws2_32.lib") // 确保链接 winsock
 
 // TAP-Windows ioctl definitions
 #define TAP_WIN_IOCTL(x) CTL_CODE(FILE_DEVICE_UNKNOWN, x, METHOD_BUFFERED, FILE_ANY_ACCESS)
@@ -24,7 +27,6 @@ public:
         if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
     }
 
-    // 通过名字（如 "tap0"）打开网卡
     bool open(std::string adapterName) {
         std::string guid = getAdapterGUID(adapterName);
         if (guid.empty()) {
@@ -41,7 +43,6 @@ public:
             return false;
         }
 
-        // 设置为“已连接”状态
         uint32_t status = 1;
         DWORD len;
         if (!DeviceIoControl(handle, TAP_WIN_IOCTL_SET_MEDIA_STATUS, &status, sizeof(status), &status, sizeof(status), &len, NULL)) {
@@ -52,30 +53,19 @@ public:
         return true;
     }
 
-    // 读取数据 (非阻塞尝试)
     int read(void* buffer, int bufferSize) {
         if (handle == INVALID_HANDLE_VALUE) return 0;
         
         DWORD readBytes = 0;
-        // 注意：这里使用了同步读取，为了简单起见。如果在主线程会卡顿。
-        // 但我们在 Audio 线程或者 Timer 线程读，数据量不大时通常没事。
-        // 为了防止卡死，最好配合 OVERLAPPED，但为了代码极简，我们这里用 PeekNamedPipe 类似的逻辑或者直接读
-        // 实际上 TAP 驱动不支持 Peek。
-        // 改进策略：这里我们假设外部会在独立线程调用，或者我们只读有数据的。
-        // 既然我们在 Audio Loop 里，最好不要阻塞。
-        // 为了 Project 3 的简单性，我们假设 TAP 总是可读的，或者由操作系统调度。
-        // 更加稳妥的方式是用 ReadFile 但不等待，这里先用最基础的阻塞读测试。
-        
         OVERLAPPED ol = {0};
         ol.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
         
         if (!ReadFile(handle, buffer, bufferSize, &readBytes, &ol)) {
             if (GetLastError() == ERROR_IO_PENDING) {
-                // 等待 1ms，没数据就走
                 if (WaitForSingleObject(ol.hEvent, 1) == WAIT_OBJECT_0) {
                     GetOverlappedResult(handle, &ol, &readBytes, FALSE);
                 } else {
-                    CancelIo(handle); // 没数据，取消
+                    CancelIo(handle);
                 }
             }
         }
@@ -83,7 +73,6 @@ public:
         return readBytes;
     }
 
-    // 写入数据
     bool write(const void* buffer, int bufferSize) {
         if (handle == INVALID_HANDLE_VALUE) return false;
         DWORD written = 0;
@@ -101,7 +90,6 @@ public:
     }
 
 private:
-    // 辅助函数：通过 FriendlyName 找 GUID
     std::string getAdapterGUID(const std::string& name) {
         ULONG outBufLen = 15000;
         PIP_ADAPTER_ADDRESSES pAddresses = (PIP_ADAPTER_ADDRESSES)malloc(outBufLen);
@@ -114,9 +102,9 @@ private:
         if (GetAdaptersAddresses(AF_UNSPEC, 0, NULL, pAddresses, &outBufLen) == NO_ERROR) {
             for (PIP_ADAPTER_ADDRESSES pCurr = pAddresses; pCurr; pCurr = pCurr->Next) {
                 std::wstring wName = pCurr->FriendlyName;
-                std::string sName(wName.begin(), wName.end()); // 粗暴转换，仅限英文名
+                std::string sName(wName.begin(), wName.end());
                 if (sName == name) {
-                    std::string adapterName = pCurr->AdapterName; // 这是 GUID
+                    std::string adapterName = pCurr->AdapterName;
                     free(pAddresses);
                     return adapterName;
                 }
