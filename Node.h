@@ -117,25 +117,46 @@ private:
 
     // 接收处理逻辑 (由 Reader 线程调用)
     void processFrame(FrameType& frame) {
-        String typeStr = (frame.type == Config::PING) ? "PING" : 
-                         (frame.type == Config::PONG) ? "PONG" : "Unknown";
-        
-        String msg = "RX << " + typeStr + " from " + IPType2Str(frame.ip) + ": " + String(frame.body.c_str());
-        log(msg);
-
-        // 如果收到 PING，自动回复 PONG
-        if (frame.type == Config::PING) {
-            // 构造回复帧
-            // 交换 src/dst ip (虽然这里我们还没填 src ip，简单起见原样发回)
-            FrameType reply(Config::PONG, frame.ip, 0, frame.body);
+        // 1. 尝试解析 IP 头
+        if (frame.body.size() >= sizeof(IPv4Header)) {
+            // 将 body 的数据强转为 IPv4Header 指针
+            IPv4Header* ipHeader = (IPv4Header*)frame.body.data();
             
-            if (writer) {
-                // 稍微延时一点点再发，避免冲突 (因为我们还没做 CSMA)
-                Thread::sleep(100); 
-                writer->send(reply);
-                log("TX >> Auto-Reply PONG");
+            // 检查版本号是否为 4 (0x45 的高4位)
+            if (ipHeader->version == 4) {
+                // 提取 IP 地址 (注意网络字节序转换)
+                // ntohl: Network to Host Long
+                String srcIP = IPType2Str(ntohl(ipHeader->src_ip));
+                String dstIP = IPType2Str(ntohl(ipHeader->dst_ip));
+                
+                String protocol = (ipHeader->protocol == 1) ? "ICMP" : String(ipHeader->protocol);
+                
+                String logMsg = "RX << IPv4 Packet [" + protocol + "] " + 
+                                srcIP + " -> " + dstIP + 
+                                " (Len: " + String(ntohs(ipHeader->total_length)) + ")";
+                log(logMsg);
+
+                // 如果是 ICMP，进一步解析
+                if (ipHeader->protocol == 1 && frame.body.size() >= sizeof(IPv4Header) + sizeof(ICMPHeader)) {
+                    // 跳过 IP 头，找到 ICMP 头
+                    ICMPHeader* icmp = (ICMPHeader*)(frame.body.data() + sizeof(IPv4Header));
+                    
+                    if (icmp->type == 8) {
+                        log("   Type: Echo Request (Ping)");
+                        // 自动回复逻辑... (稍后可以把自动回复也改成构建真正的 IP 包)
+                    } else if (icmp->type == 0) {
+                        log("   Type: Echo Reply (Pong)");
+                    }
+                }
+                return; // 解析成功，不再打印原始乱码
             }
         }
+
+        // 如果不是 IP 包，或者是旧的测试数据，保持原样打印
+        String typeStr = (frame.type == Config::PING) ? "PING" : 
+                         (frame.type == Config::PONG) ? "PONG" : "Unknown";
+        String msg = "RX << Raw Frame: " + typeStr + " : " + String(frame.body.c_str());
+        log(msg);
     }
 
     // === 音频生命周期 ===
