@@ -9,4 +9,5 @@ mine/
     ├── reader.h        (物理层接收)
     ├── writer.h        (物理层发送)
     ├── utils.h         (帧结构、CRC32声明)
-    └── utils.cpp       (CRC32实现)
+    ├── utils.cpp   (CRC32实现)
+    └── Tap.h      (控制虚拟网卡)
