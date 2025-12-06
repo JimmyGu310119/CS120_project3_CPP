@@ -44,7 +44,7 @@ public:
             protectInput->exit();
 
             if (++bufferPos == LENGTH_OF_ONE_BIT) {
-                int bit = judgeBit(buffer[0], buffer[2]);
+                int bit = judgeBit(buffer[0], buffer[1]);
                 if (bit == -1) { 
                     // 滑动窗口：丢弃最早的一个采样，尝试重新对齐
                     for (int i = 1; i < LENGTH_OF_ONE_BIT; ++i) buffer[i - 1] = buffer[i];
@@ -82,7 +82,8 @@ public:
             bool isPreamble = true;
             for (unsigned i = 0; isPreamble && i < 8 * LENGTH_PREAMBLE; ++i) {
                 // 检查是否匹配 0x55, 0x55, 0x54
-                isPreamble = (preamble[i / 8] >> (i % 8) & 1) == judgeBit(sync[i * LENGTH_OF_ONE_BIT], sync[i * LENGTH_OF_ONE_BIT + 2]);
+                isPreamble = (preamble[i / 8] >> (i % 8) & 1) == 
+                             judgeBit(sync[i * LENGTH_OF_ONE_BIT], sync[i * LENGTH_OF_ONE_BIT + 1]);
             }
             if (isPreamble) return;
         }

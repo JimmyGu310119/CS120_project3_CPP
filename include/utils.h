@@ -18,7 +18,7 @@ using TYPEType = unsigned char;
 using IPType = unsigned int;
 using PORTType = unsigned short;
 
-constexpr int LENGTH_OF_ONE_BIT = 4;
+constexpr int LENGTH_OF_ONE_BIT = 2;
 constexpr int MTU = 1500;
 constexpr int LENGTH_PREAMBLE = 3;
 constexpr int LENGTH_CRC = 4;

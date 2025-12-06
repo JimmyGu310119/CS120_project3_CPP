@@ -31,13 +31,9 @@ public:
                 // 取出第 bitPos 位
                 if ((byte >> bitPos) & 1) {
                     output->push(1.0f);
-                    output->push(1.0f);
-                    output->push(-1.0f);
                     output->push(-1.0f);
                 } else {
                     output->push(-1.0f);
-                    output->push(-1.0f);
-                    output->push(1.0f);
                     output->push(1.0f);
                 }
             }
