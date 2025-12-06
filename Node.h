@@ -1,4 +1,8 @@
 #pragma once
+
+// [重要] 防止 Windows.h 包含旧的 WinSock.h 导致冲突
+#define WIN32_LEAN_AND_MEAN 
+
 #include "include/config.h"
 #include "include/reader.h"
 #include "include/writer.h"
@@ -6,10 +10,12 @@
 #include "include/ipv4_header.h"
 #include "include/icmp_header.h"
 #include <JuceHeader.h>
-#include <winsock2.h>
+#include <winsock2.h> // 提供 htons, ntohs 等函数
 #include <queue>
+#include <map>
 
-class MainContentComponent : public juce::AudioAppComponent {
+// [修改] 继承 Timer 以实现自动 Ping 10 次
+class MainContentComponent : public juce::AudioAppComponent, public juce::Timer {
 public:
     MainContentComponent() {
         // UI 初始化
@@ -25,20 +31,45 @@ public:
         addAndMakeVisible(logEditor);
 
         // Ping 按钮
-        pingButton.setButtonText("Send PING");
+        pingButton.setButtonText("Ping 10 Times"); // 改名了
         pingButton.setBounds(200, 320, 200, 50);
-        pingButton.onClick = [this] { sendPing(); };
+        pingButton.onClick = [this] { startPingTest(); };
         addAndMakeVisible(pingButton);
 
         // 音频设置
         setAudioChannels(1, 1);
     }
 
-    ~MainContentComponent() override { shutdownAudio(); }
+    ~MainContentComponent() override { 
+        stopTimer(); // 记得停止定时器
+        shutdownAudio(); 
+    }
+
+    // [新增] 定时器回调：每秒触发一次发送
+    void timerCallback() override {
+        if (pingCounter < 10) {
+            pingCounter++;
+            // 发送给 192.168.1.2 (假设对方是 .2，如果你是Node2，这里要改)
+            sendPing("192.168.1.2", pingCounter); 
+        } else {
+            stopTimer();
+            log("\n--- Ping statistics ---");
+            log("10 packets transmitted.");
+        }
+    }
 
 private:
+    // 记录发送时间：Seq -> Time
+    std::map<uint16_t, std::chrono::steady_clock::time_point> pingSentTime;
+    int pingCounter = 0; // 计数器
+
+    void startPingTest() {
+        pingCounter = 0;
+        log("\n--- Pinging 192.168.1.2 with 32 bytes of data ---");
+        startTimer(1000); // 启动定时器，间隔 1000ms
+    }
+
     void log(const String& msg) {
-        // 在主线程更新 UI
         MessageManager::callAsync([this, msg]() {
             logEditor.moveCaretToEnd();
             logEditor.insertTextAtCaret(msg + "\n");
@@ -46,7 +77,7 @@ private:
         });
     }
 
-    // 标准的 Internet Checksum 算法
+    // 标准 Checksum 算法
     uint16_t calculateChecksum(void* vdata, size_t length) {
         char* data = (char*)vdata;
         uint32_t acc = 0;
@@ -64,158 +95,146 @@ private:
         return htons((uint16_t)~acc);
     }
 
-    // 发送 Ping 逻辑
-    void sendPing() {
-        // 1. 准备缓冲区 (IP头 + ICMP头 + 数据)
-        const int payloadSize = 32; // 标准 Ping 通常带 32 字节数据
+    // 发送 Ping (Echo Request)
+    void sendPing(String targetIPStr, int seq) {
+        const int payloadSize = 32;
         const int totalSize = sizeof(IPv4Header) + sizeof(ICMPHeader) + payloadSize;
         std::vector<uint8_t> buffer(totalSize, 0);
 
-        // 2. 填充 IP 头
+        // 1. IP Header
         IPv4Header* ip = (IPv4Header*)buffer.data();
         ip->version = 4;
-        ip->ihl = 5; // Header Length = 5 * 32bit = 20 bytes
+        ip->ihl = 5;
         ip->tos = 0;
         ip->total_length = htons(totalSize);
-        ip->id = htons(12345); // 随机 ID
+        ip->id = htons(12345);
         ip->flags_offset = 0;
         ip->ttl = 64;
-        ip->protocol = 1; // 1 代表 ICMP 协议
-        ip->src_ip = htonl(Str2IPType("192.168.1.1")); // 假装我是 .1
-        ip->dst_ip = htonl(Str2IPType("192.168.1.2")); // 假装发给 .2
+        ip->protocol = 1; // ICMP
+        
+        // 注意：如果你是 Node2，这里 src 应该填 1.2，dst 填 1.1
+        // 这里默认写死你是 Node1 (1.1) -> Node2 (1.2)
+        ip->src_ip = htonl(Str2IPType("192.168.1.1")); 
+        ip->dst_ip = htonl(Str2IPType(targetIPStr.toStdString())); 
+        
         ip->checksum = 0;
         ip->checksum = calculateChecksum(ip, sizeof(IPv4Header));
 
-        // 3. 填充 ICMP 头 (紧跟在 IP 头后面)
+        // 2. ICMP Header
         ICMPHeader* icmp = (ICMPHeader*)(buffer.data() + sizeof(IPv4Header));
-        icmp->type = 8; // 8 = Echo Request (Ping 请求)
+        icmp->type = 8; // Echo Request
         icmp->code = 0;
-        icmp->id = htons(1);      // 标识符
-        icmp->sequence = htons(1);// 序列号
+        icmp->id = htons(1);      
+        icmp->sequence = htons((uint16_t)seq);
         
-        // 填充 Payload (比如 abcdef...)
+        // 3. Payload
         uint8_t* payload = buffer.data() + sizeof(IPv4Header) + sizeof(ICMPHeader);
         for(int i=0; i<payloadSize; ++i) payload[i] = (uint8_t)('a' + (i % 26));
 
-        // 计算 ICMP 校验和 (包含头和数据)
+        // ICMP Checksum
         icmp->checksum = 0;
         icmp->checksum = calculateChecksum(icmp, sizeof(ICMPHeader) + payloadSize);
 
-        // 4. 封装进 Aethernet Frame 发送
-        // 把二进制 buffer 转成 string (为了适配 FrameType)
+        // 4. Send Frame
         std::string rawData((char*)buffer.data(), buffer.size());
-        
-        // 使用 Config::IP_PACKET 类型 (如果你还没定义，去 config.h 加一个)
-        // 或者暂时借用 Config::PING
         FrameType frame(Config::PING, 0, 0, rawData); 
         
         if (writer) {
+            // 记录发送时间
+            pingSentTime[(uint16_t)seq] = std::chrono::steady_clock::now();
             writer->send(frame);
-            log("TX >> ICMP Echo Request (Size: " + String(totalSize) + ")");
+            // 本地就不打印发送日志了，刷屏不好看，只打印接收
         }
     }
-    // 构造并发送 ICMP Echo Reply
+
+    // 构造并发送 Reply (Echo Reply)
     void sendEchoReply(const IPv4Header* srcIPHead, const ICMPHeader* srcICMPHead, const uint8_t* payload, int payloadLen) {
-        // 1. 准备缓冲区
         int totalSize = sizeof(IPv4Header) + sizeof(ICMPHeader) + payloadLen;
         std::vector<uint8_t> buffer(totalSize, 0);
 
-        // 2. 构造 IP 头 (交换 Src 和 Dst)
+        // IP
         IPv4Header* ip = (IPv4Header*)buffer.data();
-        *ip = *srcIPHead; // 复制原来的头
-        ip->src_ip = srcIPHead->dst_ip; // 也就是我自己的 IP
-        ip->dst_ip = srcIPHead->src_ip; // 发回给对方
-        // 重新计算 IP 校验和
+        *ip = *srcIPHead;
+        ip->src_ip = srcIPHead->dst_ip; // 交换 IP
+        ip->dst_ip = srcIPHead->src_ip;
         ip->checksum = 0;
         ip->checksum = calculateChecksum(ip, sizeof(IPv4Header));
 
-        // 3. 构造 ICMP 头 (Type 变为 0)
+        // ICMP
         ICMPHeader* icmp = (ICMPHeader*)(buffer.data() + sizeof(IPv4Header));
-        *icmp = *srcICMPHead; // 复制原来的 ID 和 Sequence
-        icmp->type = 0;       // 0 = Echo Reply (Pong)
-        icmp->code = 0;
+        *icmp = *srcICMPHead;
+        icmp->type = 0; // Echo Reply
+        icmp->checksum = 0;
         
-        // 4. 复制 Payload
+        // Payload
         uint8_t* destPayload = buffer.data() + sizeof(IPv4Header) + sizeof(ICMPHeader);
         memcpy(destPayload, payload, payloadLen);
 
-        // 重新计算 ICMP 校验和
-        icmp->checksum = 0;
+        // ICMP Checksum
         icmp->checksum = calculateChecksum(icmp, sizeof(ICMPHeader) + payloadLen);
 
-        // 5. 发送
+        // Send
         std::string rawData((char*)buffer.data(), buffer.size());
-        FrameType frame(Config::PING, 0, 0, rawData); // 暂时还是用 PING 类型，或者你可以定义一个 IP_PACKET
+        FrameType frame(Config::PING, 0, 0, rawData);
         
         if (writer) {
-            // 稍微延时避免冲突
-            Thread::sleep(50); 
+            Thread::sleep(50); // 稍微避让
             writer->send(frame);
-            log("TX >> ICMP Echo Reply (Pong)");
+            // log("TX >> Auto-Reply PONG");
         }
     }
-    // 接收处理逻辑 (由 Reader 线程调用)
+
+    // 接收处理
     void processFrame(FrameType& frame) {
-        // 1. 尝试解析 IP 头
+        // 尝试解析 IP 头
         if (frame.body.size() >= sizeof(IPv4Header)) {
-            // 将 body 的数据强转为 IPv4Header 指针
             IPv4Header* ipHeader = (IPv4Header*)frame.body.data();
             
-            // 检查版本号是否为 4 (0x45 的高4位)
             if (ipHeader->version == 4) {
-                // 提取 IP 地址 (注意网络字节序转换)
-                // ntohl: Network to Host Long
                 String srcIP = IPType2Str(ntohl(ipHeader->src_ip));
-                String dstIP = IPType2Str(ntohl(ipHeader->dst_ip));
                 
-                String protocol = (ipHeader->protocol == 1) ? "ICMP" : String(ipHeader->protocol);
-                
-                String logMsg = "RX << IPv4 Packet [" + protocol + "] " + 
-                                srcIP + " -> " + dstIP + 
-                                " (Len: " + String(ntohs(ipHeader->total_length)) + ")";
-                log(logMsg);
-
-                // 如果是 ICMP，进一步解析
+                // 解析 ICMP
                 if (ipHeader->protocol == 1 && frame.body.size() >= sizeof(IPv4Header) + sizeof(ICMPHeader)) {
-                    // 跳过 IP 头，找到 ICMP 头
                     ICMPHeader* icmp = (ICMPHeader*)(frame.body.data() + sizeof(IPv4Header));
-                    
+                    uint16_t seq = ntohs(icmp->sequence);
+
                     if (icmp->type == 8) {
-                        log("   Type: Echo Request (Ping)");
-                        
-                        // [新增] 自动回复逻辑
-                        // 计算 Payload 的位置和长度
+                        // 收到 Ping -> 回复 Pong
+                        // log("RX << Echo Request from " + srcIP + " seq=" + String(seq));
                         uint8_t* payloadPtr = (uint8_t*)icmp + sizeof(ICMPHeader);
                         int payloadLen = frame.body.size() - sizeof(IPv4Header) - sizeof(ICMPHeader);
-                        
-                        // 发送回复
                         sendEchoReply(ipHeader, icmp, payloadPtr, payloadLen);
                         
                     } else if (icmp->type == 0) {
-                        log("   Type: Echo Reply (Pong) - Latency Test Success!");
+                        // 收到 Pong -> 计算时间
+                        if (pingSentTime.count(seq)) {
+                            auto now = std::chrono::steady_clock::now();
+                            auto rtt = std::chrono::duration_cast<std::chrono::milliseconds>(now - pingSentTime[seq]).count();
+                            
+                            // 打印标准 Ping 格式
+                            String logMsg = "Reply from " + srcIP + 
+                                            ": bytes=" + String(frame.body.size() - sizeof(IPv4Header) - sizeof(ICMPHeader)) +
+                                            " time=" + String(rtt) + "ms TTL=" + String(ipHeader->ttl) +
+                                            " seq=" + String(seq);
+                            log(logMsg);
+                            
+                            pingSentTime.erase(seq);
+                        }
                     }
                 }
-                return; // 解析成功，不再打印原始乱码
+                return; 
             }
         }
-
-        // 如果不是 IP 包，或者是旧的测试数据，保持原样打印
-        String typeStr = (frame.type == Config::PING) ? "PING" : 
-                         (frame.type == Config::PONG) ? "PONG" : "Unknown";
-        String msg = "RX << Raw Frame: " + typeStr + " : " + String(frame.body.c_str());
-        log(msg);
+        // 如果不是 IP 包
+        log("RX << Unknown Frame");
     }
 
-    // === 音频生命周期 ===
+    // === JUCE Audio Boilerplate ===
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override {
-        // 初始化 Reader 线程，传入回调函数
         reader = std::make_unique<Reader>(&directInput, &directInputLock, 
             [this](FrameType& f) { processFrame(f); });
         reader->startThread();
-
-        // 初始化 Writer
         writer = std::make_unique<Writer>(&directOutput, &directOutputLock);
-        
         log("Audio Initialized. Rate: " + String(sampleRate));
     }
 
@@ -232,16 +251,13 @@ private:
             if ((!activeInputChannels[channel] || !activeOutputChannels[channel]) || maxInputChannels == 0) {
                 buffer->clear(channel, bufferToFill.startSample, bufferToFill.numSamples);
             } else {
-                // 1. 读取麦克风 -> 输入队列
                 const float* readPtr = buffer->getReadPointer(channel);
                 directInputLock.enter();
                 for (int i = 0; i < bufferSize; ++i) directInput.push(readPtr[i]);
                 directInputLock.exit();
 
-                // 2. 清空 Buffer 准备写入
                 buffer->clear(channel, bufferToFill.startSample, bufferToFill.numSamples);
 
-                // 3. 输出队列 -> 扬声器
                 float* writePtr = buffer->getWritePointer(channel);
                 directOutputLock.enter();
                 for (int i = 0; i < bufferSize; ++i) {
@@ -263,13 +279,10 @@ private:
         writer = nullptr;
     }
 
-    // 成员变量
     std::unique_ptr<Reader> reader;
     std::unique_ptr<Writer> writer;
-    
     std::queue<float> directInput;
     CriticalSection directInputLock;
-    
     std::queue<float> directOutput;
     CriticalSection directOutputLock;
 
