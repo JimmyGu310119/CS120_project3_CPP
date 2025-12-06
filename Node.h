@@ -178,7 +178,7 @@ private:
         FrameType frame(Config::PING, 0, 0, rawData);
         
         if (writer) {
-            Thread::sleep(50); // 稍微避让
+            //Thread::sleep(50); // 稍微避让
             writer->send(frame);
             // log("TX >> Auto-Reply PONG");
         }
@@ -231,6 +231,11 @@ private:
 
     // === JUCE Audio Boilerplate ===
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override {
+        AudioDeviceManager::AudioDeviceSetup setup;
+        deviceManager.getAudioDeviceSetup(setup);
+        setup.bufferSize = 144; // 144 samples @ 48kHz = 3ms 延迟
+        setup.sampleRate = 48000;
+        deviceManager.setAudioDeviceSetup(setup, true);
         reader = std::make_unique<Reader>(&directInput, &directInputLock, 
             [this](FrameType& f) { processFrame(f); });
         reader->startThread();
