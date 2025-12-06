@@ -114,7 +114,46 @@ private:
             log("TX >> ICMP Echo Request (Size: " + String(totalSize) + ")");
         }
     }
+    // 构造并发送 ICMP Echo Reply
+    void sendEchoReply(const IPv4Header* srcIPHead, const ICMPHeader* srcICMPHead, const uint8_t* payload, int payloadLen) {
+        // 1. 准备缓冲区
+        int totalSize = sizeof(IPv4Header) + sizeof(ICMPHeader) + payloadLen;
+        std::vector<uint8_t> buffer(totalSize, 0);
 
+        // 2. 构造 IP 头 (交换 Src 和 Dst)
+        IPv4Header* ip = (IPv4Header*)buffer.data();
+        *ip = *srcIPHead; // 复制原来的头
+        ip->src_ip = srcIPHead->dst_ip; // 也就是我自己的 IP
+        ip->dst_ip = srcIPHead->src_ip; // 发回给对方
+        // 重新计算 IP 校验和
+        ip->checksum = 0;
+        ip->checksum = calculateChecksum(ip, sizeof(IPv4Header));
+
+        // 3. 构造 ICMP 头 (Type 变为 0)
+        ICMPHeader* icmp = (ICMPHeader*)(buffer.data() + sizeof(IPv4Header));
+        *icmp = *srcICMPHead; // 复制原来的 ID 和 Sequence
+        icmp->type = 0;       // 0 = Echo Reply (Pong)
+        icmp->code = 0;
+        
+        // 4. 复制 Payload
+        uint8_t* destPayload = buffer.data() + sizeof(IPv4Header) + sizeof(ICMPHeader);
+        memcpy(destPayload, payload, payloadLen);
+
+        // 重新计算 ICMP 校验和
+        icmp->checksum = 0;
+        icmp->checksum = calculateChecksum(icmp, sizeof(ICMPHeader) + payloadLen);
+
+        // 5. 发送
+        std::string rawData((char*)buffer.data(), buffer.size());
+        FrameType frame(Config::PING, 0, 0, rawData); // 暂时还是用 PING 类型，或者你可以定义一个 IP_PACKET
+        
+        if (writer) {
+            // 稍微延时避免冲突
+            Thread::sleep(50); 
+            writer->send(frame);
+            log("TX >> ICMP Echo Reply (Pong)");
+        }
+    }
     // 接收处理逻辑 (由 Reader 线程调用)
     void processFrame(FrameType& frame) {
         // 1. 尝试解析 IP 头
@@ -143,9 +182,17 @@ private:
                     
                     if (icmp->type == 8) {
                         log("   Type: Echo Request (Ping)");
-                        // 自动回复逻辑... (稍后可以把自动回复也改成构建真正的 IP 包)
+                        
+                        // [新增] 自动回复逻辑
+                        // 计算 Payload 的位置和长度
+                        uint8_t* payloadPtr = (uint8_t*)icmp + sizeof(ICMPHeader);
+                        int payloadLen = frame.body.size() - sizeof(IPv4Header) - sizeof(ICMPHeader);
+                        
+                        // 发送回复
+                        sendEchoReply(ipHeader, icmp, payloadPtr, payloadLen);
+                        
                     } else if (icmp->type == 0) {
-                        log("   Type: Echo Reply (Pong)");
+                        log("   Type: Echo Reply (Pong) - Latency Test Success!");
                     }
                 }
                 return; // 解析成功，不再打印原始乱码
