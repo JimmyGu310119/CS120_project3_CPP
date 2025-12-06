@@ -68,6 +68,7 @@ public:
             
             if (len > 0) {
                 // 收到系统/手机发来的 IP 包 -> 封装成 Audio Frame 发出去
+                log("DEBUG: TAP read " + String(len) + " bytes"); 
                 std::string rawData((char*)buffer, len);
                 
                 // 简单起见，我们假设目的 IP 就在包里，直接广播
