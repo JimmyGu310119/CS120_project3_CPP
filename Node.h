@@ -138,12 +138,13 @@ private:
                         // 强制把源 IP 改成手机的 IP (192.168.137.94)
                         // 注意：如果你的手机 IP 变了，这里也要变！
                         // 为了通用，你可以写死手机 IP，或者让手机设置静态 IP
-                        ip->src_ip = htonl(Str2IPType("192.168.137.94"));
-                        
+                        //ip->src_ip = htonl(Str2IPType("192.168.137.94"));
+                        IPv4Header* ip = (IPv4Header*)frame.body.data();
+        ip->            src_ip = htonl(Str2IPType("192.168.137.1")); // 笔记本热点 IP
                         // [重要] 修改了 IP 头，必须重新计算 Checksum，否则台式机会丢弃
                         ip->checksum = 0;
                         ip->checksum = calculateChecksum(ip, sizeof(IPv4Header));
-                        
+                        bool sent = sniffer->sendPacket((uint8_t*)frame.body.data(), frame.body.size());
                         // Log 一下，确认修改成功
                         // MessageManager::callAsync([this](){ log("SNIFFER: Patched Source IP to Phone's IP"); });
                     }
