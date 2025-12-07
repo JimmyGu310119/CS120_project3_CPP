@@ -71,7 +71,7 @@ public:
             protectInput->enter();
             if (input->empty()) {
                 protectInput->exit();
-                wait(1);
+                //wait(1);
                 continue;
             }
             sync.pop_front();

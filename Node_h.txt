@@ -110,61 +110,41 @@ private:
         int id = roleSelector.getSelectedId();
         if (id == 1) {
             myIP = "192.168.1.1";
-            amIRouter = false; 
+            amIRouter = false; // 台式机不是路由器
         } else if (id == 2) {
             myIP = "192.168.1.2";
-            amIRouter = true;  
+            amIRouter = true;  // 笔记本是路由器
         }
         
         log("Role switched to: " + myIP + (amIRouter ? " (Router Mode)" : ""));
-        
-        if (sniffer) {
-            sniffer->stopThread(2000);
-            sniffer.reset();
-        }
-
+            if (sniffer) {
+        sniffer->stopThread(2000);
+        sniffer.reset();
+    }
+        // 尝试打开 TAP (只有 Router 需要，但为了防呆，都试一下也无妨)
         if (amIRouter) {
-            // 请务必确认你的热点网关 IP，如果是 137.1 就不用改
-            sniffer = std::make_unique<WifiSniffer>("192.168.137.1", 
-                [this](const uint8_t* data, int len) {
-                    
-                    // === [新增] IP Patching 逻辑 ===
-                    // 复制一份数据，因为我们要修改它
-                    std::vector<uint8_t> patchedData(data, data + len);
-                    
-                    if (len >= sizeof(IPv4Header)) {
-                        IPv4Header* ip = (IPv4Header*)patchedData.data();
-                        
-                        // 强制把源 IP 改成手机的 IP (192.168.137.94)
-                        // 注意：如果你的手机 IP 变了，这里也要变！
-                        // 为了通用，你可以写死手机 IP，或者让手机设置静态 IP
-                        ip->src_ip = htonl(Str2IPType("192.168.137.94"));
-                        
-                        // [重要] 修改了 IP 头，必须重新计算 Checksum，否则台式机会丢弃
-                        ip->checksum = 0;
-                        ip->checksum = calculateChecksum(ip, sizeof(IPv4Header));
-                        
-                        // Log 一下，确认修改成功
-                        // MessageManager::callAsync([this](){ log("SNIFFER: Patched Source IP to Phone's IP"); });
-                    }
-                    // ==============================
-
-                    // 使用修改后的数据 patchedData 发送
-                    std::string rawData((char*)patchedData.data(), len);
-                    FrameType frame(Config::PING, 0, 0, rawData);
-                    
-                    if (writer) {
-                        writer->send(frame);
-                        MessageManager::callAsync([this, len](){
-                            log("SNIFFER: Forwarded " + String(len) + " bytes (Patched)");
-                        });
-                    } else {
-                        log("ERROR: Writer is NULL!");
-                    }
-                });
-            
-            sniffer->startThread();
-            log("Sniffer started on 192.168.137.1");
+        // Node 2: 启动 Sniffer，监听热点网关 IP
+        // 请确认你的热点网关是不是 192.168.137.1
+        // 如果 ipconfig 显示是别的，请在这里修改
+        sniffer = std::make_unique<WifiSniffer>("192.168.137.1", 
+            [this](const uint8_t* data, int len) {
+                // 这是回调函数：当抓到发往 1.1 的包时执行
+                log("DEBUG: Sniffer Callback triggered! Size=" + String(len));
+                // 1. 构造 Frame
+                std::string rawData((char*)data, len);
+                FrameType frame(Config::PING, 0, 0, rawData);
+                
+                // 2. 直接通过音频转发！
+                if (writer) {
+                    writer->send(frame);
+                    log("DEBUG: Sent to Audio Writer");
+                } else {
+                    log("ERROR: Writer is NULL!");
+                }
+            });
+        
+        sniffer->startThread();
+        log("Sniffer started on 192.168.137.1");
         }
     }
 
@@ -279,7 +259,7 @@ private:
         if (frame.body.size() < sizeof(IPv4Header)) return;
         IPv4Header* ipHeader = (IPv4Header*)frame.body.data();
         if (ipHeader->version != 4) return;
- 
+
         String srcIP = IPType2Str(ntohl(ipHeader->src_ip));
         String dstIP = IPType2Str(ntohl(ipHeader->dst_ip));
 
