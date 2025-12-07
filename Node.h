@@ -19,6 +19,7 @@
 #include <JuceHeader.h>
 #include <queue>
 #include <map>
+#include "include/WifiSniffer.h"
 
 class MainContentComponent : public juce::AudioAppComponent, public juce::Timer {
 public:
@@ -62,25 +63,25 @@ public:
     // === 核心逻辑：定时器 (处理 TAP 和 Ping) ===
     void timerCallback() override {
         // [Task 2] 从 TAP 网卡读取数据 (如果是路由器模式)
-        if (amIRouter) {
-            uint8_t buffer[1500];
-            int len = tap.read(buffer, 1500);
+        // if (amIRouter) {
+        //     uint8_t buffer[1500];
+        //     int len = tap.read(buffer, 1500);
             
-            if (len > 0) {
-                // 收到系统/手机发来的 IP 包 -> 封装成 Audio Frame 发出去
-                log("DEBUG: TAP read " + String(len) + " bytes"); 
-                std::string rawData((char*)buffer, len);
+        //     if (len > 0) {
+        //         // 收到系统/手机发来的 IP 包 -> 封装成 Audio Frame 发出去
+        //         log("DEBUG: TAP read " + String(len) + " bytes"); 
+        //         std::string rawData((char*)buffer, len);
                 
-                // 简单起见，我们假设目的 IP 就在包里，直接广播
-                // 也可以解析一下 header 看看去哪，但广播最稳
-                FrameType frame(Config::PING, 0, 0, rawData);
+        //         // 简单起见，我们假设目的 IP 就在包里，直接广播
+        //         // 也可以解析一下 header 看看去哪，但广播最稳
+        //         FrameType frame(Config::PING, 0, 0, rawData);
                 
-                if (writer) {
-                    writer->send(frame);
-                    // log("TAP >> Forwarded " + String(len) + " bytes to Audio");
-                }
-            }
-        }
+        //         if (writer) {
+        //             writer->send(frame);
+        //             // log("TAP >> Forwarded " + String(len) + " bytes to Audio");
+        //         }
+        //     }
+        // }
 
         // [Task 1] 自动 Ping 逻辑
         if (isPinging && pingCounter < 10) {
@@ -97,13 +98,13 @@ public:
 private:
     // === 成员变量 ===
     Tap tap; // 虚拟网卡
-    String myIP = "192.168.1.1";
-    bool amIRouter = false;
+    String myIP = "192.168.1.2";
+    bool amIRouter = true;
     
     std::map<uint16_t, std::chrono::steady_clock::time_point> pingSentTime;
     int pingCounter = 0;
     bool isPinging = false;
-
+    std::unique_ptr<WifiSniffer> sniffer;
     // === 辅助函数 ===
     void updateRole() {
         int id = roleSelector.getSelectedId();
@@ -116,11 +117,34 @@ private:
         }
         
         log("Role switched to: " + myIP + (amIRouter ? " (Router Mode)" : ""));
-        
+            if (sniffer) {
+        sniffer->stopThread(2000);
+        sniffer.reset();
+    }
         // 尝试打开 TAP (只有 Router 需要，但为了防呆，都试一下也无妨)
-        if (amIRouter && tap.handle == INVALID_HANDLE_VALUE) {
-            if (tap.open("tap0")) log("TAP 'tap0' opened!");
-            else log("Error: TAP 'tap0' open failed.");
+        if (amIRouter) {
+        // Node 2: 启动 Sniffer，监听热点网关 IP
+        // 请确认你的热点网关是不是 192.168.137.1
+        // 如果 ipconfig 显示是别的，请在这里修改
+        sniffer = std::make_unique<WifiSniffer>("192.168.137.1", 
+            [this](const uint8_t* data, int len) {
+                // 这是回调函数：当抓到发往 1.1 的包时执行
+                log("DEBUG: Sniffer Callback triggered! Size=" + String(len));
+                // 1. 构造 Frame
+                std::string rawData((char*)data, len);
+                FrameType frame(Config::PING, 0, 0, rawData);
+                
+                // 2. 直接通过音频转发！
+                if (writer) {
+                    writer->send(frame);
+                    log("DEBUG: Sent to Audio Writer");
+                } else {
+                    log("ERROR: Writer is NULL!");
+                }
+            });
+        
+        sniffer->startThread();
+        log("Sniffer started on 192.168.137.1");
         }
     }
 

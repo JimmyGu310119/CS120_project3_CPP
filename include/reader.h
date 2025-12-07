@@ -110,16 +110,18 @@ public:
                 frame.body.push_back(readByte()); 
             }
 
+
             // 读取 CRC
             unsigned int crcRead;
             readObject(crcRead);
 
             // 校验
             if (crcRead == frame.crc()) {
-                // 回调处理
+                DBG("DEBUG: CRC OK! Handing to process...");
                 process(frame);
             } else {
-                DBG("CRC Error");
+                // 重点：看看是不是 CRC 挂了
+                DBG("DEBUG: CRC FAIL! Read: " + String(crcRead) + " Calc: " + String(frame.crc()) + " Len: " + String(frame.len));
             }
         }
     }
