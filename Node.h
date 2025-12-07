@@ -312,9 +312,22 @@ private:
 
         // 2. [Task 2] 转发逻辑 (Router)
         if (amIRouter) {
-            // 写入 TAP 网卡 (交给系统去处理，比如转发给手机)
-            if (tap.write(frame.body.data(), frame.body.size())) {
-                log("ROUTER: Forwarded packet to System/TAP (" + srcIP + " -> " + dstIP + ")");
+            // [修改] 以前是 tap.write，现在改成直接用 Sniffer 发回 Wi-Fi
+            // 我们判断一下：如果目标 IP 是手机网段 (192.168.137.x)，就发给手机
+            
+            // 简单判断：只要不是发给我的，且我是路由器，我就尝试转发给手机
+            if (sniffer) {
+                // frame.body 里面是完整的 IP 包
+                bool sent = sniffer->sendPacket((uint8_t*)frame.body.data(), frame.body.size());
+                
+                if (sent) {
+                    log("ROUTER: Forwarded Reply to Phone via RawSocket (" + srcIP + " -> " + dstIP + ")");
+                } else {
+                    log("ROUTER: Forward failed.");
+                }
+            } else {
+                // 如果 sniffer 没初始化 (防呆)
+                log("ROUTER Error: Sniffer not ready to send.");
             }
         }
         fprintf(stderr, "DEBUG: ProcessFrame called! Protocol=%d\n", ipHeader->protocol);
